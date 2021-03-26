@@ -13,38 +13,44 @@ GLOBAL_LIST_INIT(icons_to_ignore_at_floor_init, list("damaged1","damaged2","dama
 				"ironsand6", "ironsand7", "ironsand8", "ironsand9", "ironsand10", "ironsand11",
 				"ironsand12", "ironsand13", "ironsand14", "ironsand15"))
 
-/turf/simulated/floor
+/turf/open/floor
 	name = "floor"
 	icon = 'icons/turf/floors.dmi'
 	icon_state = "dont_use_this_floor"
 	plane = FLOOR_PLANE
-	var/icon_regular_floor = "floor" //used to remember what icon the tile should have by default
-	var/icon_plating = "plating"
 	thermal_conductivity = 0.040
 	heat_capacity = 10000
-	var/lava = 0
-	var/broken = 0
-	var/burnt = 0
+	intact = TRUE
+	indestructible_turf = FALSE		//Establish as not indestructible_turf
+	var/icon_regular_floor = "floor" //used to remember what icon the tile should have by default
+	var/icon_plating = "plating"
+	var/lava = FALSE
+	var/broken = FALSE
+	var/burnt = FALSE
 	var/current_overlay = null
 	var/floor_tile = null //tile that this floor drops
 	var/list/broken_states = list("damaged1", "damaged2", "damaged3", "damaged4", "damaged5")
 	var/list/burnt_states = list("floorscorched1", "floorscorched2")
 	var/list/prying_tool_list = list(TOOL_CROWBAR) //What tool/s can we use to pry up the tile?
 
-/turf/simulated/floor/Initialize(mapload)
+
+	oxygen = MOLES_O2STANDARD
+	nitrogen = MOLES_N2STANDARD
+
+/turf/open/floor/Initialize(mapload)
 	. = ..()
 	if(icon_state in GLOB.icons_to_ignore_at_floor_init) //so damaged/burned tiles or plating icons aren't saved as the default
 		icon_regular_floor = "floor"
 	else
 		icon_regular_floor = icon_state
 
-//turf/simulated/floor/CanPass(atom/movable/mover, turf/target, height=0)
-//	if((istype(mover, /obj/machinery/vehicle) && !(src.burnt)))
+//turf/open/floor/CanPass(atom/movable/mover, turf/target, height=0)
+//	if((istype(mover, /obj/machinery/vehicle) && !(burnt)))
 //		if(!( locate(/obj/machinery/mass_driver, src) ))
-//			return 0
+//			return FALSE
 //	return ..()
 
-/turf/simulated/floor/ex_act(severity)
+/turf/open/floor/ex_act(severity)
 	if(is_shielded())
 		return
 	switch(severity)
@@ -54,7 +60,7 @@ GLOBAL_LIST_INIT(icons_to_ignore_at_floor_init, list("damaged1","damaged2","dama
 			switch(pick(1,2;75,3))
 				if(1)
 					spawn(0)
-						ReplaceWithLattice()
+						ReplaceWithLattice(baseturf, /obj/structure/lattice)
 						if(prob(33)) new /obj/item/stack/sheet/metal(src)
 				if(2)
 					ChangeTurf(baseturf)
@@ -71,56 +77,56 @@ GLOBAL_LIST_INIT(icons_to_ignore_at_floor_init, list("damaged1","damaged2","dama
 				hotspot_expose(1000,CELL_VOLUME)
 	return
 
-/turf/simulated/floor/burn_down()
+/turf/open/floor/burn_down()
 	ex_act(2)
 
-/turf/simulated/floor/is_shielded()
+/turf/open/floor/is_shielded()
 	for(var/obj/structure/A in contents)
 		if(A.level == 3)
-			return 1
+			return TRUE
 
-/turf/simulated/floor/blob_act(obj/structure/blob/B)
+/turf/open/floor/blob_act(obj/structure/blob/B)
 	return
 
-/turf/simulated/floor/proc/update_icon()
+/turf/open/floor/proc/update_icon()
 	update_visuals()
 	overlays -= current_overlay
 	if(current_overlay)
 		overlays.Add(current_overlay)
-	return 1
+	return TRUE
 
-/turf/simulated/floor/proc/break_tile_to_plating()
-	var/turf/simulated/floor/plating/T = make_plating()
+/turf/open/floor/proc/break_tile_to_plating()
+	var/turf/open/floor/plating/T = make_plating()
 	T.break_tile()
 
-/turf/simulated/floor/break_tile()
+/turf/open/floor/break_tile()
 	if(broken)
 		return
 	current_overlay = pick(broken_states)
 	broken = TRUE
 	update_icon()
 
-/turf/simulated/floor/burn_tile()
+/turf/open/floor/burn_tile()
 	if(burnt)
 		return
 	current_overlay = pick(burnt_states)
 	burnt = TRUE
 	update_icon()
 
-/turf/simulated/floor/proc/make_plating()
-	return ChangeTurf(/turf/simulated/floor/plating)
+/turf/open/floor/proc/make_plating()
+	return ChangeTurf(/turf/open/floor/plating)
 
-/turf/simulated/floor/ChangeTurf(turf/simulated/floor/T, defer_change = FALSE, keep_icon = TRUE, ignore_air = FALSE)
-	if(!istype(src, /turf/simulated/floor))
-		return ..() //fucking turfs switch the fucking src of the fucking running procs
-	if(!ispath(T, /turf/simulated/floor))
+/turf/open/floor/ChangeTurf(turf/open/floor/T, defer_change = FALSE, keep_icon = TRUE, ignore_air = FALSE)
+	if(!istype(src, /turf/open/floor))
+		return ..()
+	if(!ispath(T, /turf/open/floor))
 		return ..()
 
 	var/old_icon = icon_regular_floor
 	var/old_plating = icon_plating
 	var/old_dir = dir
 
-	var/turf/simulated/floor/W = ..()
+	var/turf/open/floor/W = ..()
 
 	if(keep_icon)
 		W.icon_regular_floor = old_icon
@@ -130,16 +136,13 @@ GLOBAL_LIST_INIT(icons_to_ignore_at_floor_init, list("damaged1","damaged2","dama
 	W.update_icon()
 	return W
 
-/turf/simulated/floor/attackby(obj/item/C as obj, mob/user as mob, params)
+/turf/open/floor/attackby(obj/item/C, mob/user, params)
 	if(!C || !user)
 		return TRUE
-
 	if(..())
 		return TRUE
-
 	if(intact && istype(C, /obj/item/stack/tile))
 		try_replace_tile(C, user, params)
-
 	if(istype(C, /obj/item/pipe))
 		var/obj/item/pipe/P = C
 		if(P.pipe_type != -1) // ANY PIPE
@@ -159,7 +162,6 @@ GLOBAL_LIST_INIT(icons_to_ignore_at_floor_init, list("damaged1","damaged2","dama
 					P.dir = 10
 			else
 				P.setDir(user.dir)
-
 			P.x = src.x
 			P.y = src.y
 			P.z = src.z
@@ -167,7 +169,7 @@ GLOBAL_LIST_INIT(icons_to_ignore_at_floor_init, list("damaged1","damaged2","dama
 			return TRUE
 	return FALSE
 
-/turf/simulated/floor/crowbar_act(mob/user, obj/item/I)
+/turf/open/floor/crowbar_act(mob/user, obj/item/I)
 	if(!intact)
 		return
 	. = TRUE
@@ -175,26 +177,26 @@ GLOBAL_LIST_INIT(icons_to_ignore_at_floor_init, list("damaged1","damaged2","dama
 		return
 	pry_tile(I, user, TRUE)
 
-/turf/simulated/floor/proc/try_replace_tile(obj/item/stack/tile/T, mob/user, params)
+/turf/open/floor/proc/try_replace_tile(obj/item/stack/tile/T, mob/user, params)
 	if(T.turf_type == type)
 		return
 	var/obj/item/thing = user.get_inactive_hand()
 	if(!thing || !prying_tool_list.Find(thing.tool_behaviour))
 		return
-	var/turf/simulated/floor/plating/P = pry_tile(thing, user, TRUE)
+	var/turf/open/floor/plating/P = pry_tile(thing, user, TRUE)
 	if(!istype(P))
 		return
 	P.attackby(T, user, params)
 
-/turf/simulated/floor/proc/pry_tile(obj/item/C, mob/user, silent = FALSE)
+/turf/open/floor/proc/pry_tile(obj/item/C, mob/user, silent = FALSE)
 	if(!silent)
 		playsound(src, C.usesound, 80, 1)
 	return remove_tile(user, silent)
 
-/turf/simulated/floor/proc/remove_tile(mob/user, silent = FALSE, make_tile = TRUE)
+/turf/open/floor/proc/remove_tile(mob/user, silent = FALSE, make_tile = TRUE)
 	if(broken || burnt)
-		broken = 0
-		burnt = 0
+		broken = FALSE
+		burnt = FALSE
 		current_overlay = null
 		if(user && !silent)
 			to_chat(user, "<span class='danger'>You remove the broken plating.</span>")
@@ -205,7 +207,7 @@ GLOBAL_LIST_INIT(icons_to_ignore_at_floor_init, list("damaged1","damaged2","dama
 			new floor_tile(src)
 	return make_plating()
 
-/turf/simulated/floor/singularity_pull(S, current_size)
+/turf/open/floor/singularity_pull(S, current_size)
 	..()
 	if(current_size == STAGE_THREE)
 		if(prob(30))
@@ -223,19 +225,22 @@ GLOBAL_LIST_INIT(icons_to_ignore_at_floor_init, list("damaged1","damaged2","dama
 				new floor_tile(src)
 				make_plating()
 		else if(prob(50))
-			ReplaceWithLattice()
+			ReplaceWithLattice(baseturf, /obj/structure/lattice)
 
-/turf/simulated/floor/narsie_act()
+/turf/open/floor/narsie_act()
 	if(prob(20))
-		ChangeTurf(/turf/simulated/floor/engine/cult)
+		ChangeTurf(/turf/open/floor/engine/cult)
 
-/turf/simulated/floor/ratvar_act(force, ignore_mobs)
+/turf/open/floor/ratvar_act(force, ignore_mobs)
 	. = ..()
 	if(.)
-		ChangeTurf(/turf/simulated/floor/clockwork)
+		ChangeTurf(/turf/open/floor/clockwork)
 
-/turf/simulated/floor/acid_melt()
+/turf/open/floor/acid_melt()
 	ChangeTurf(baseturf)
 
-/turf/simulated/floor/can_have_cabling()
+/turf/open/floor/can_have_cabling()
 	return !burnt && !broken
+
+/turf/open/floor/swarmer_act() //ex_act() on turf calls it on its contents, this is to prevent attacking mobs by DisIntegrate()'ing the floor
+	return FALSE

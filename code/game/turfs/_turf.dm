@@ -3,12 +3,7 @@
 	level = 1
 	luminosity = 1
 
-	var/intact = TRUE
-	var/turf/baseturf = /turf/space
-	var/slowdown = 0 //negative for faster, positive for slower
-
-	///Properties for open tiles (/floor)
-	/// All the gas vars, on the turf, are meant to be utilized for initializing a gas datum and setting its first gas values; the turf vars are never further modified at runtime; it is never directly used for calculations by the atmospherics system.
+	var/datum/gas_mixture/air
 	var/oxygen = 0
 	var/carbon_dioxide = 0
 	var/nitrogen = 0
@@ -16,28 +11,29 @@
 	var/sleeping_agent = 0
 	var/agent_b = 0
 
+	var/intact = TRUE
+	var/turf/baseturf = /turf/open/space
+	var/slowdown = 0 //negative for faster, positive for slower
+
 	//Properties for airtight tiles (/wall)
 	var/thermal_conductivity = 0.05
 	var/heat_capacity = 1
-
 	//Properties for both
 	var/temperature = T20C
-
-	var/blocks_air = 0
 
 	var/datum/pathnode/PNode = null //associated PathNode in the A* algorithm
 
 	flags = 0
 
 	var/image/obscured	//camerachunks
-
 	var/changing_turf = FALSE
-
 	var/list/blueprint_data //for the station blueprints, images of objects eg: pipes
-
 	var/list/footstep_sounds
 	var/shoe_running_volume = 50
 	var/shoe_walking_volume = 20
+
+	var/thermite = 0
+	var/indestructible_turf = FALSE
 
 /turf/Initialize(mapload)
 	SHOULD_CALL_PARENT(FALSE)
@@ -68,6 +64,16 @@
 
 	return INITIALIZE_HINT_NORMAL
 
+/turf/New()
+	..()
+	levelupdate()
+	if(smooth)
+		smooth_icon(src)
+	visibilityChanged()
+	for(var/atom/movable/AM in src)
+		Entered(AM)
+
+
 /turf/Destroy(force)
 	. = QDEL_HINT_IWILLGC
 	if(!changing_turf)
@@ -80,13 +86,6 @@
 		for(var/A in B.contents)
 			qdel(A)
 		return
-	// Adds the adjacent turfs to the current atmos processing
-	for(var/direction in GLOB.cardinal)
-		if(atmos_adjacent_turfs & direction)
-			var/turf/simulated/T = get_step(src, direction)
-			if(istype(T))
-				SSair.add_to_active(T)
-	SSair.remove_from_active(src)
 	visibilityChanged()
 	QDEL_LIST(blueprint_data)
 	initialized = FALSE
@@ -96,27 +95,32 @@
 	user.Move_Pulled(src)
 
 /turf/ex_act(severity)
+	if(indestructible_turf)
+		return
 	return FALSE
 
 /turf/rpd_act(mob/user, obj/item/rpd/our_rpd) //This is the default turf behaviour for the RPD; override it as required
-	if(our_rpd.mode == RPD_ATMOS_MODE)
-		our_rpd.create_atmos_pipe(user, src)
-	else if(our_rpd.mode == RPD_DISPOSALS_MODE)
-		for(var/obj/machinery/door/airlock/A in src)
-			if(A.density)
-				to_chat(user, "<span class='warning'>That type of pipe won't fit under [A]!</span>")
-				return
-		our_rpd.create_disposals_pipe(user, src)
-	else if(our_rpd.mode == RPD_ROTATE_MODE)
-		our_rpd.rotate_all_pipes(user, src)
-	else if(our_rpd.mode == RPD_FLIP_MODE)
-		our_rpd.flip_all_pipes(user, src)
-	else if(our_rpd.mode == RPD_DELETE_MODE)
-		our_rpd.delete_all_pipes(user, src)
+	if(indestructible_turf)
+		return
+	else
+		if(our_rpd.mode == RPD_ATMOS_MODE)
+			our_rpd.create_atmos_pipe(user, src)
+		else if(our_rpd.mode == RPD_DISPOSALS_MODE)
+			for(var/obj/machinery/door/airlock/A in src)
+				if(A.density)
+					to_chat(user, "<span class='warning'>That type of pipe won't fit under [A]!</span>")
+					return
+			our_rpd.create_disposals_pipe(user, src)
+		else if(our_rpd.mode == RPD_ROTATE_MODE)
+			our_rpd.rotate_all_pipes(user, src)
+		else if(our_rpd.mode == RPD_FLIP_MODE)
+			our_rpd.flip_all_pipes(user, src)
+		else if(our_rpd.mode == RPD_DELETE_MODE)
+			our_rpd.delete_all_pipes(user, src)
 
 /turf/bullet_act(obj/item/projectile/Proj)
 	if(istype(Proj, /obj/item/projectile/beam/pulse))
-		src.ex_act(2)
+		ex_act(2)
 	..()
 	return FALSE
 
@@ -149,21 +153,15 @@
 			large_dense += border_obstacle
 
 	//Then, check the turf itself
-	if(!src.CanPass(mover, src))
+	if(!CanPass(mover, src))
 		mover.Bump(src, TRUE)
 		return FALSE
 
 	//Finally, check objects/mobs to block entry that are not on the border
-	var/atom/movable/tompost_bump
-	var/top_layer = FALSE
 	for(var/atom/movable/obstacle in large_dense)
 		if(!obstacle.CanPass(mover, mover.loc, 1) && (forget != obstacle))
-			if(obstacle.layer > top_layer)
-				tompost_bump = obstacle
-				top_layer = obstacle.layer
-	if(tompost_bump)
-		mover.Bump(tompost_bump, TRUE)
-		return FALSE
+			mover.Bump(obstacle, TRUE)
+			return FALSE
 	return TRUE //Nothing found to block so return success!
 
 /turf/Entered(atom/movable/M, atom/OL, ignoreRest = FALSE)
@@ -172,7 +170,6 @@
 		var/mob/O = M
 		if(!O.lastarea)
 			O.lastarea = get_area(O.loc)
-
 	// If an opaque movable atom moves around we need to potentially update visibility.
 	if(M.opacity)
 		has_opaque_atom = TRUE // Make sure to do this before reconsider_lights(), incase we're on instant updates. Guaranteed to be on in this case.
@@ -180,14 +177,8 @@
 
 /turf/proc/levelupdate()
 	for(var/obj/O in src)
-		if(O.level == 1 && O.initialized) // Only do this if the object has initialized
-			O.hide(src.intact)
-
-// override for space turfs, since they should never hide anything
-/turf/space/levelupdate()
-	for(var/obj/O in src)
 		if(O.level == 1)
-			O.hide(FALSE)
+			O.hide(src.intact)
 
 // Removes all signs of lattice on the pos of the turf -Donkieyo
 /turf/proc/RemoveLattice()
@@ -199,6 +190,8 @@
 	return
 
 /turf/proc/TerraformTurf(path, defer_change = FALSE, keep_icon = TRUE, ignore_air = FALSE)
+	if(indestructible_turf)
+		return
 	return ChangeTurf(path, defer_change, keep_icon, ignore_air)
 
 //Creates a new turf
@@ -207,7 +200,6 @@
 		return
 	if(!GLOB.use_preloader && path == type) // Don't no-op if the map loader requires it to be reconstructed
 		return src
-
 	set_light(0)
 	var/old_opacity = opacity
 	var/old_dynamic_lighting = dynamic_lighting
@@ -216,21 +208,18 @@
 	var/old_blueprint_data = blueprint_data
 	var/old_obscured = obscured
 	var/old_corners = corners
-
 	BeforeChange()
 
 	var/old_baseturf = baseturf
 	changing_turf = TRUE
 	qdel(src)	//Just get the side effects and call Destroy
+
 	var/turf/W = new path(src)
 	W.baseturf = old_baseturf
-
 	if(!defer_change)
 		W.AfterChange(ignore_air)
 	W.blueprint_data = old_blueprint_data
-
 	recalc_atom_opacity()
-
 	if(SSlighting.initialized)
 		recalc_atom_opacity()
 		lighting_object = old_lighting_object
@@ -238,18 +227,14 @@
 		corners = old_corners
 		if(old_opacity != opacity || dynamic_lighting != old_dynamic_lighting)
 			reconsider_lights()
-
 		if(dynamic_lighting != old_dynamic_lighting)
 			if(IS_DYNAMIC_LIGHTING(src))
 				lighting_build_overlay()
 			else
 				lighting_clear_overlay()
-
-		for(var/turf/space/S in RANGE_TURFS(1, src)) //RANGE_TURFS is in code\__HELPERS\game.dm
+		for(var/turf/open/space/S in RANGE_TURFS(1, src)) //RANGE_TURFS is in code\__HELPERS\game.dm
 			S.update_starlight()
-
 	obscured = old_obscured
-
 	return W
 
 /turf/proc/BeforeChange()
@@ -274,49 +259,16 @@
 		for(var/obj/structure/cable/C in contents)
 			qdel(C)
 
-/turf/simulated/AfterChange(ignore_air = FALSE, keep_cabling = FALSE)
-	..()
-	RemoveLattice()
-	if(!ignore_air)
-		Assimilate_Air()
+/turf/proc/break_tile()
+	return
 
-//////Assimilate Air//////
-/turf/simulated/proc/Assimilate_Air()
-	if(air)
-		var/aoxy = 0 //Holders to assimilate air from nearby turfs
-		var/anitro = 0
-		var/aco = 0
-		var/atox = 0
-		var/asleep = 0
-		var/ab = 0
-		var/atemp = 0
-		var/turf_count = 0
+/turf/proc/burn_tile()
+	return
 
-		for(var/direction in GLOB.cardinal)//Only use cardinals to cut down on lag
-			var/turf/T = get_step(src, direction)
-			if(istype(T, /turf/space))//Counted as no air
-				turf_count++//Considered a valid turf for air calcs
-				continue
-			else if(istype(T, /turf/simulated/floor))
-				var/turf/simulated/S = T
-				if(S.air)//Add the air's contents to the holders
-					aoxy += S.air.oxygen
-					anitro += S.air.nitrogen
-					aco += S.air.carbon_dioxide
-					atox += S.air.toxins
-					asleep += S.air.sleeping_agent
-					ab += S.air.agent_b
-					atemp += S.air.temperature
-				turf_count++
-		air.oxygen = (aoxy / max(turf_count, 1)) //Averages contents of the turfs, ignoring walls and the like
-		air.nitrogen = (anitro / max(turf_count, 1))
-		air.carbon_dioxide = (aco / max(turf_count, 1))
-		air.toxins = (atox / max(turf_count, 1))
-		air.sleeping_agent = (asleep / max(turf_count, 1))
-		air.agent_b = (ab / max(turf_count, 1))
-		air.temperature = (atemp / max(turf_count, 1))
-		if(SSair)
-			SSair.add_to_active(src)
+/turf/proc/burn_down()
+	return
+
+/turf/proc/is_shielded()
 
 /turf/proc/ReplaceWithLattice()
 	ChangeTurf(baseturf)
@@ -341,9 +293,6 @@
 /turf/proc/MakeDry(wet_setting = TURF_WET_WATER)
 	return
 
-/turf/proc/burn_down()
-	return
-
 /////////////////////////////////////////////////////////////////////////
 // Navigation procs
 // Used for A-star pathfinding
@@ -357,7 +306,7 @@
 // Including through doors openable with the ID
 /turf/proc/CardinalTurfsWithAccess(var/obj/item/card/id/ID)
 	var/list/L = new()
-	var/turf/simulated/T
+	var/turf/open/T
 
 	for(var/dir in GLOB.cardinal)
 		T = get_step(src, dir)
@@ -370,7 +319,7 @@
 // Don't check for ID, doors passable only if open
 /turf/proc/CardinalTurfs()
 	var/list/L = new()
-	var/turf/simulated/T
+	var/turf/open/T
 
 	for(var/dir in GLOB.cardinal)
 		T = get_step(src, dir)
@@ -383,11 +332,11 @@
 //All directions movements
 ///////////////////////////
 
-// Returns the surrounding simulated turfs with open links
+// Returns the surrounding open turfs with open links
 // Including through doors openable with the ID
 /turf/proc/AdjacentTurfsWithAccess(obj/item/card/id/ID = null, list/closed)//check access if one is passed
 	var/list/L = new()
-	var/turf/simulated/T
+	var/turf/open/T
 	for(var/dir in GLOB.alldirs2) //arbitrarily ordered list to favor non-diagonal moves in case of ties
 		T = get_step(src, dir)
 		if(T in closed) //turf already proceeded in A*
@@ -400,7 +349,7 @@
 //Idem, but don't check for ID and goes through open doors
 /turf/proc/AdjacentTurfs(list/closed)
 	var/list/L = new()
-	var/turf/simulated/T
+	var/turf/open/T
 	for(var/dir in GLOB.alldirs2) //arbitrarily ordered list to favor non-diagonal moves in case of ties
 		T = get_step(src, dir)
 		if(T in closed) //turf already proceeded by A*
@@ -441,11 +390,13 @@
 /turf/proc/Distance_cardinal(turf/T)
 	if(!src || !T)
 		return 0
-	return abs(src.x - T.x) + abs(src.y - T.y)
+	return abs(x - T.x) + abs(y - T.y)
 
 ////////////////////////////////////////////////////
 
 /turf/acid_act(acidpwr, acid_volume)
+	if(indestructible_turf)
+		return FALSE
 	. = TRUE
 	var/acid_type = /obj/effect/acid
 	if(acidpwr >= 200) //alien acid power
@@ -466,14 +417,9 @@
 /turf/proc/acid_melt()
 	return
 
-/turf/handle_fall(mob/faller, forced)
-	faller.lying = pick(90, 270)
-	if(!forced)
-		return
-	if(has_gravity(src))
-		playsound(src, "bodyfall", 50, TRUE)
-
 /turf/singularity_act()
+	if(indestructible_turf)
+		return
 	if(intact)
 		for(var/obj/O in contents) //this is for deleting things like wires contained in the turf
 			if(O.level != 1)
@@ -513,9 +459,13 @@
 	return TRUE
 
 /turf/proc/can_lay_cable()
+	if(indestructible_turf)
+		return FALSE
 	return can_have_cabling() & !intact
 
 /turf/ratvar_act(force, ignore_mobs, probability = 40)
+	if(indestructible_turf)
+		return
 	. = (prob(probability) || force)
 	for(var/I in src)
 		var/atom/A = I
@@ -543,7 +493,7 @@
 	if(!SSticker || SSticker.current_state != GAME_STATE_PLAYING)
 		add_blueprints(AM)
 
-/turf/proc/empty(turf_type = /turf/space)
+/turf/proc/empty(turf_type = /turf/open/space)
 	// Remove all atoms except observers, landmarks, docking ports, and (un)`simulated` atoms (lighting overlays)
 	var/turf/T0 = src
 	for(var/X in T0.GetAllContents())
@@ -566,3 +516,6 @@
 
 /turf/AllowDrop()
 	return TRUE
+
+/turf/proc/water_act(volume, temperature, source)
+	return FALSE
